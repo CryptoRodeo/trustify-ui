@@ -15,13 +15,13 @@ import {
   type IngestResult,
   type Labels,
   type SbomHead,
-  type SbomSummary,
   bulkUpdateSbomGroupAssignments,
   deleteSbom,
   downloadSbom,
   getSbom,
   getSbomAdvisories,
   listAllLicenseIds,
+  listModels,
   listRelatedSboms,
   listSbomLabels,
   listSboms,
@@ -119,20 +119,19 @@ export const useFetchSBOMById = (
 };
 
 export const useDeleteSbomMutation = (
-  onSuccess: (payload: SbomSummary, id: string) => void,
+  onSuccess: (sbom: SbomHead) => void,
   onError: (err: AxiosError) => void,
 ) => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
-      const response = await deleteSbom({ client, path: { id } });
-      return response.data as SbomSummary;
+    mutationFn: async (sbom: SbomHead) => {
+      await deleteSbom({ client, path: { id: sbom.id } });
     },
-    onSuccess: async (response, id) => {
-      onSuccess(response, id);
+    onSuccess: async (_, sbom) => {
+      onSuccess(sbom);
       await queryClient.invalidateQueries({ queryKey: [SBOMsQueryKey] });
 
-      queryClient.removeQueries({ queryKey: [SBOMsQueryKey, id] });
+      queryClient.removeQueries({ queryKey: [SBOMsQueryKey, sbom.id] });
     },
     onError: async (err: AxiosError) => {
       onError(err);
@@ -271,6 +270,32 @@ export const useFetchSbomsLicenseIds = (sbomId: string) => {
     licenseIds: data?.data || [],
     isFetching: isLoading,
     fetchError: error as AxiosError | null,
+  };
+};
+
+export const useFetchModelsBySbomId = (
+  sbomId: string,
+  params: HubRequestParams = {},
+) => {
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: [SBOMsQueryKey, sbomId, "models", params],
+    queryFn: () => {
+      return listModels({
+        client,
+        path: { id: sbomId },
+        query: { ...requestParamsQuery(params) },
+      });
+    },
+  });
+  return {
+    result: {
+      data: data?.data?.items || [],
+      total: data?.data?.total ?? 0,
+      params: params ?? params,
+    },
+    isFetching: isLoading,
+    fetchError: error as AxiosError | null,
+    refetch,
   };
 };
 

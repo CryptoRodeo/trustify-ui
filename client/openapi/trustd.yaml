@@ -5,7 +5,7 @@ info:
   license:
     name: Apache License, Version 2.0
     identifier: Apache-2.0
-  version: 0.5.0-alpha.1
+  version: 0.5.0-beta.3
 paths:
   /.well-known/trustify:
     get:
@@ -19,12 +19,181 @@ paths:
                 type: object
                 required:
                 - version
+                - readOnly
                 properties:
                   build:
                     type: object
+                  readOnly:
+                    type: boolean
                   version:
                     type: string
-  /api/v2/advisory:
+  /api/v2/purl/recommend:
+    post:
+      tags:
+      - purl
+      operationId: v2/recommend
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecommendRequest'
+        required: true
+      responses:
+        '200':
+          description: Get recommendations and remediations for provided purls
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendResponse'
+      deprecated: true
+  /api/v2/sbom:
+    get:
+      tags:
+      - sbom
+      summary: List SBOMs
+      operationId: v2/listSboms
+      parameters:
+      - name: q
+        in: query
+        description: |
+          EBNF grammar for the _q_ parameter:
+          ```text
+              q = ( values | filter ) { '&' q }
+              values = value { '|', values }
+              filter = field, operator, values
+              operator = "=" | "!=" | "~" | "!~" | ">=" | ">" | "<=" | "<"
+              value = (* any text but escape special characters with '\' *)
+              field = (* must match an entity attribute name *)
+          ```
+          Any values in a _q_ will result in a case-insensitive "full
+          text search", effectively producing an OR clause of LIKE
+          clauses for every string-ish field in the resource being
+          queried.
+
+          Examples:
+          - `foo` - any field containing 'foo'
+          - `foo|bar` - any field containing either 'foo' OR 'bar'
+          - `foo&bar` - some field contains 'foo' AND some field contains 'bar'
+
+          A _filter_ may also be used to constrain the results. The
+          filter's field name must correspond to one of the resource's
+          attributes. If it doesn't, an error will be returned
+          containing a list of the valid fields for that resource.
+
+          An ASCII value of `NUL`, percent-encoded as `%00`, may be used
+          to find resources on which a particular field isn't set. For
+          example, `name=%00` and `name!=%00` yield the WHERE clauses,
+          'NAME IS NULL' and 'NAME IS NOT NULL', respectively.
+
+          Examples:
+          - `name=foo` - entity's _name_ matches 'foo' exactly
+          - `name~foo` - entity's _name_ contains 'foo', case-insensitive
+          - `name~foo|bar` - entity's _name_ contains either 'foo' OR 'bar', case-insensitive
+          - `name=` - entity's _name_ is the empty string, ''
+          - `name=%00` - entity's _name_ isn't set
+          - `published>3 days ago` - date values can be "human time"
+
+          Multiple full text searches and/or filters should be
+          '&'-delimited -- they are logically AND'd together.
+
+          - `red hat|fedora&labels:type=cve|osv&published>last wednesday 17:00`
+
+          Fields corresponding to JSON objects in the database may use a
+          ':' to delimit the column name and the object key,
+          e.g. `purl:qualifiers:type=pom`
+
+          Any operator or special character, e.g. '|', '&', within a
+          value should be escaped by prefixing it with a backslash.
+        required: false
+        schema:
+          type: string
+      - name: sort
+        in: query
+        description: |
+          EBNF grammar for the _sort_ parameter:
+          ```text
+              sort = field [ ':', order ] { ',' sort }
+              order = ( "asc" | "desc" )
+              field = (* must match the name of entity's attributes *)
+          ```
+          The optional _order_ should be one of "asc" or "desc". If
+          omitted, the order defaults to "asc".
+
+          Each _field_ name must correspond to one of the columns of the
+          table holding the entities being queried. Those corresponding
+          to JSON objects in the database may use a ':' to delimit the
+          column name and the object key,
+          e.g. `purl:qualifiers:type:desc`
+        required: false
+        schema:
+          type: string
+      - name: offset
+        in: query
+        description: |-
+          The first item to return, skipping all that come before it.
+
+          NOTE: The order of items is defined by the API being called.
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: limit
+        in: query
+        description: |-
+          The maximum number of entries to return.
+
+          Zero means: return no items (the total count is still computed if requested).
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
+      - name: group
+        in: query
+        description: |-
+          Filter by group IDs. Only SBOMs assigned to any of the provided groups will be returned.
+          Can be specified multiple times. Malformed IDs are silently ignored.
+        required: false
+        schema:
+          type: array
+          items:
+            type: string
+      responses:
+        '200':
+          description: Matching SBOMs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResults_SbomSummary_SbomPackage'
+      deprecated: true
+  /api/v2/vulnerability/analyze:
+    post:
+      tags:
+      - vulnerability
+      summary: Analyze the provided purls for the known vulnerabilities
+      operationId: v2/analyze
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalysisRequest'
+        required: true
+      responses:
+        '200':
+          description: Analyze the provided purls to search for known vulnerabilities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+      deprecated: true
+  /api/v3/advisory:
     get:
       tags:
       - advisory
@@ -93,12 +262,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       - name: deprecated
         in: query
         required: false
@@ -167,7 +342,7 @@ paths:
           description: Upload a file
         '400':
           description: The file could not be parsed as an advisory
-  /api/v2/advisory-labels:
+  /api/v3/advisory-labels:
     get:
       tags:
       - advisory
@@ -194,7 +369,7 @@ paths:
               schema:
                 type: array
                 items: {}
-  /api/v2/advisory/{id}/label:
+  /api/v3/advisory/{id}/label:
     put:
       tags:
       - advisory
@@ -241,7 +416,7 @@ paths:
           description: Modified the labels of the advisory
         '404':
           description: The advisory could not be found
-  /api/v2/advisory/{key}:
+  /api/v3/advisory/{key}:
     get:
       tags:
       - advisory
@@ -282,7 +457,7 @@ paths:
                 $ref: '#/components/schemas/AdvisoryDetails'
         '404':
           description: The advisory could not be found
-  /api/v2/advisory/{key}/download:
+  /api/v3/advisory/{key}/download:
     get:
       tags:
       - advisory
@@ -291,6 +466,7 @@ paths:
       parameters:
       - name: key
         in: path
+        description: Identifier of the advisory, either `urn:uuid:<uuid>` or a digest e.g. `sha256:<hex>`
         required: true
         schema:
           $ref: '#/components/schemas/Id'
@@ -304,7 +480,7 @@ paths:
                 format: binary
         '404':
           description: The document could not be found
-  /api/v2/analysis/component:
+  /api/v3/analysis/component:
     get:
       tags:
       - analysis
@@ -401,12 +577,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       - name: ancestors
         in: query
         description: |-
@@ -450,7 +632,7 @@ paths:
           description: The user did not provide valid authentication credentials
         '403':
           description: The user lacks the required permission
-  /api/v2/analysis/component/{key}:
+  /api/v3/analysis/component/{key}:
     get:
       tags:
       - analysis
@@ -479,12 +661,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       - name: ancestors
         in: query
         description: |-
@@ -528,7 +716,7 @@ paths:
           description: The user did not provide valid authentication credentials
         '403':
           description: The user lacks the required permission
-  /api/v2/analysis/latest/component:
+  /api/v3/analysis/latest/component:
     get:
       tags:
       - analysis
@@ -625,12 +813,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       - name: ancestors
         in: query
         description: |-
@@ -674,7 +868,7 @@ paths:
           description: The user did not provide valid authentication credentials
         '403':
           description: The user lacks the required permission
-  /api/v2/analysis/latest/component/{key}:
+  /api/v3/analysis/latest/component/{key}:
     get:
       tags:
       - analysis
@@ -703,12 +897,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       - name: ancestors
         in: query
         description: |-
@@ -752,7 +952,7 @@ paths:
           description: The user did not provide valid authentication credentials
         '403':
           description: The user lacks the required permission
-  /api/v2/analysis/sbom/{sbom}/render.{ext}:
+  /api/v3/analysis/sbom/{sbom}/render.{ext}:
     get:
       tags:
       - analysis
@@ -788,7 +988,7 @@ paths:
           description: The SBOM could not be found
         '415':
           description: Unsupported rendering format
-  /api/v2/analysis/status:
+  /api/v3/analysis/status:
     get:
       tags:
       - analysis
@@ -811,7 +1011,7 @@ paths:
           description: The user did not provide valid authentication credentials
         '403':
           description: The user lacks the required permission
-  /api/v2/dataset:
+  /api/v3/dataset:
     post:
       tags:
       - dataset
@@ -839,7 +1039,7 @@ paths:
           description: Uploaded the dataset
         '400':
           description: The file could not be parsed as an dataset
-  /api/v2/group/sbom:
+  /api/v3/group/sbom:
     get:
       tags:
       - sbomGroup
@@ -878,12 +1078,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       - name: q
         in: query
         description: |
@@ -1002,7 +1208,7 @@ paths:
           description: The user authenticated, but not authorized for this operation
         '409':
           description: The name of the group is not unique within the parent
-  /api/v2/group/sbom-assignment:
+  /api/v3/group/sbom-assignment:
     put:
       tags:
       - sbomGroup
@@ -1023,7 +1229,7 @@ paths:
           description: The user was not authenticated
         '403':
           description: The user authenticated, but not authorized for this operation
-  /api/v2/group/sbom-assignment/{id}:
+  /api/v3/group/sbom-assignment/{id}:
     get:
       tags:
       - sbomGroup
@@ -1086,7 +1292,7 @@ paths:
           description: The user authenticated, but not authorized for this operation
         '412':
           description: The requested revision is not the current revision
-  /api/v2/group/sbom/{id}:
+  /api/v3/group/sbom/{id}:
     get:
       tags:
       - sbomGroup
@@ -1195,7 +1401,7 @@ paths:
           description: The group has child groups and cannot be deleted
         '412':
           description: The requested revision is not the current revision of the group
-  /api/v2/importer:
+  /api/v3/importer:
     get:
       tags:
       - importer
@@ -1210,7 +1416,7 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Importer'
-  /api/v2/importer/{name}:
+  /api/v3/importer/{name}:
     get:
       tags:
       - importer
@@ -1348,7 +1554,7 @@ paths:
           description: The importer could not be found
         '412':
           description: The provided if-match header did not match the stored revision
-  /api/v2/importer/{name}/enabled:
+  /api/v3/importer/{name}/enabled:
     put:
       tags:
       - importer
@@ -1382,7 +1588,7 @@ paths:
           description: The importer could not be found
         '412':
           description: The provided if-match header did not match the stored revision
-  /api/v2/importer/{name}/force:
+  /api/v3/importer/{name}/force:
     post:
       tags:
       - importer
@@ -1416,7 +1622,7 @@ paths:
           description: The importer could not be found
         '412':
           description: The provided if-match header did not match the stored revision
-  /api/v2/importer/{name}/report:
+  /api/v3/importer/{name}/report:
     get:
       tags:
       - importer
@@ -1513,12 +1719,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       - name: name
         in: path
         required: true
@@ -1531,7 +1743,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedResults_ImporterReport'
-  /api/v2/license:
+  /api/v3/license:
     get:
       tags:
       - license
@@ -1600,12 +1812,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: Matching licenses
@@ -1613,7 +1831,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedResults_LicenseText'
-  /api/v2/license/spdx/license:
+  /api/v3/license/spdx/license:
     get:
       tags:
       - spdx license
@@ -1710,12 +1928,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: Matching licenses
@@ -1723,7 +1947,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedResults_SpdxLicenseSummary'
-  /api/v2/license/spdx/license/{id}:
+  /api/v3/license/spdx/license/{id}:
     get:
       tags:
       - spdx license
@@ -1742,7 +1966,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SpdxLicenseDetails'
-  /api/v2/organization:
+  /api/v3/organization:
     get:
       tags:
       - organization
@@ -1839,12 +2063,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: Matching organizations
@@ -1852,7 +2082,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OrganizationSummary'
-  /api/v2/organization/{id}:
+  /api/v3/organization/{id}:
     get:
       tags:
       - organization
@@ -1875,7 +2105,7 @@ paths:
                 $ref: '#/components/schemas/OrganizationDetails'
         '404':
           description: The organization could not be found
-  /api/v2/product:
+  /api/v3/product:
     get:
       tags:
       - product
@@ -1971,12 +2201,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: Matching products
@@ -1984,7 +2220,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedResults_ProductSummary'
-  /api/v2/product/{id}:
+  /api/v3/product/{id}:
     get:
       tags:
       - product
@@ -2027,7 +2263,7 @@ paths:
                 $ref: '#/components/schemas/ProductDetails'
         '404':
           description: The product could not be found
-  /api/v2/purl:
+  /api/v3/purl:
     get:
       tags:
       - purl
@@ -2124,12 +2360,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: All relevant matching qualified PURLs
@@ -2137,7 +2379,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedResults_PurlSummary'
-  /api/v2/purl/base:
+  /api/v3/purl/base:
     get:
       tags:
       - purl
@@ -2234,12 +2476,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: All relevant matching versionless base PURL
@@ -2247,7 +2495,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedResults_BasePurlSummary'
-  /api/v2/purl/base/{key}:
+  /api/v3/purl/base/{key}:
     get:
       tags:
       - purl
@@ -2256,7 +2504,7 @@ paths:
       parameters:
       - name: key
         in: path
-        description: opaque identifier for a base PURL, or a URL-encoded pURL itself
+        description: opaque identifier for a base PURL, or a URL-encoded full pURL starting with `pkg:` (e.g. `pkg:golang/k8s.io%2Fapiserver`)
         required: true
         schema:
           type: string
@@ -2267,7 +2515,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BasePurlDetails'
-  /api/v2/purl/recommend:
+  /api/v3/purl/recommend:
     post:
       tags:
       - purl
@@ -2285,7 +2533,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecommendResponse'
-  /api/v2/purl/{key}:
+  /api/v3/purl/{key}:
     get:
       tags:
       - purl
@@ -2313,7 +2561,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PurlDetails'
-  /api/v2/sbom:
+  /api/v3/sbom:
     get:
       tags:
       - sbom
@@ -2410,12 +2658,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       - name: group
         in: query
         description: |-
@@ -2432,7 +2686,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedResults_SbomSummary'
+                $ref: '#/components/schemas/PaginatedResults_SbomSummary_SbomPackageSummary'
     post:
       tags:
       - sbom
@@ -2507,7 +2761,7 @@ paths:
                 $ref: '#/components/schemas/IngestResult'
         '400':
           description: One or more group IDs are invalid or do not exist
-  /api/v2/sbom-labels:
+  /api/v3/sbom-labels:
     get:
       tags:
       - sbom
@@ -2534,7 +2788,7 @@ paths:
               schema:
                 type: array
                 items: {}
-  /api/v2/sbom/by-package:
+  /api/v3/sbom/by-package:
     get:
       tags:
       - sbom
@@ -2634,12 +2888,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       - name: purl
         in: query
         description: Find by PURL
@@ -2663,7 +2923,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedResults_SbomSummary'
-  /api/v2/sbom/count-by-package:
+  /api/v3/sbom/count-by-package:
     get:
       tags:
       - sbom
@@ -2707,7 +2967,129 @@ paths:
                 items:
                   type: integer
                   format: int64
-  /api/v2/sbom/{id}:
+  /api/v3/sbom/models:
+    get:
+      tags:
+      - sbom
+      summary: Search for all AI models
+      operationId: listAllModels
+      parameters:
+      - name: q
+        in: query
+        description: |
+          EBNF grammar for the _q_ parameter:
+          ```text
+              q = ( values | filter ) { '&' q }
+              values = value { '|', values }
+              filter = field, operator, values
+              operator = "=" | "!=" | "~" | "!~" | ">=" | ">" | "<=" | "<"
+              value = (* any text but escape special characters with '\' *)
+              field = (* must match an entity attribute name *)
+          ```
+          Any values in a _q_ will result in a case-insensitive "full
+          text search", effectively producing an OR clause of LIKE
+          clauses for every string-ish field in the resource being
+          queried.
+
+          Examples:
+          - `foo` - any field containing 'foo'
+          - `foo|bar` - any field containing either 'foo' OR 'bar'
+          - `foo&bar` - some field contains 'foo' AND some field contains 'bar'
+
+          A _filter_ may also be used to constrain the results. The
+          filter's field name must correspond to one of the resource's
+          attributes. If it doesn't, an error will be returned
+          containing a list of the valid fields for that resource.
+
+          An ASCII value of `NUL`, percent-encoded as `%00`, may be used
+          to find resources on which a particular field isn't set. For
+          example, `name=%00` and `name!=%00` yield the WHERE clauses,
+          'NAME IS NULL' and 'NAME IS NOT NULL', respectively.
+
+          Examples:
+          - `name=foo` - entity's _name_ matches 'foo' exactly
+          - `name~foo` - entity's _name_ contains 'foo', case-insensitive
+          - `name~foo|bar` - entity's _name_ contains either 'foo' OR 'bar', case-insensitive
+          - `name=` - entity's _name_ is the empty string, ''
+          - `name=%00` - entity's _name_ isn't set
+          - `published>3 days ago` - date values can be "human time"
+
+          Multiple full text searches and/or filters should be
+          '&'-delimited -- they are logically AND'd together.
+
+          - `red hat|fedora&labels:type=cve|osv&published>last wednesday 17:00`
+
+          Fields corresponding to JSON objects in the database may use a
+          ':' to delimit the column name and the object key,
+          e.g. `purl:qualifiers:type=pom`
+
+          Any operator or special character, e.g. '|', '&', within a
+          value should be escaped by prefixing it with a backslash.
+        required: false
+        schema:
+          type: string
+      - name: sort
+        in: query
+        description: |
+          EBNF grammar for the _sort_ parameter:
+          ```text
+              sort = field [ ':', order ] { ',' sort }
+              order = ( "asc" | "desc" )
+              field = (* must match the name of entity's attributes *)
+          ```
+          The optional _order_ should be one of "asc" or "desc". If
+          omitted, the order defaults to "asc".
+
+          Each _field_ name must correspond to one of the columns of the
+          table holding the entities being queried. Those corresponding
+          to JSON objects in the database may use a ':' to delimit the
+          column name and the object key,
+          e.g. `purl:qualifiers:type:desc`
+        required: false
+        schema:
+          type: string
+      - name: offset
+        in: query
+        description: |-
+          The first item to return, skipping all that come before it.
+
+          NOTE: The order of items is defined by the API being called.
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: limit
+        in: query
+        description: |-
+          The maximum number of entries to return.
+
+          Zero means: return no items (the total count is still computed if requested).
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
+      - name: counts
+        in: query
+        description: Include SBOM counts for each model
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: AI Models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResults_SbomModel'
+  /api/v3/sbom/{id}:
     get:
       tags:
       - sbom
@@ -2740,15 +3122,11 @@ paths:
         schema:
           $ref: '#/components/schemas/Id'
       responses:
-        '200':
-          description: Matching SBOM
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SbomSummary'
+        '204':
+          description: Matching SBOM as deleted
         '404':
           description: The SBOM could not be found
-  /api/v2/sbom/{id}/advisory:
+  /api/v3/sbom/{id}/advisory:
     get:
       tags:
       - sbom
@@ -2771,7 +3149,7 @@ paths:
                   $ref: '#/components/schemas/SbomAdvisory'
         '404':
           description: The SBOM could not be found
-  /api/v2/sbom/{id}/all-license-ids:
+  /api/v3/sbom/{id}/all-license-ids:
     get:
       tags:
       - sbom
@@ -2794,7 +3172,7 @@ paths:
                   $ref: '#/components/schemas/LicenseRefMapping'
         '400':
           description: Invalid UUID format.
-  /api/v2/sbom/{id}/label:
+  /api/v3/sbom/{id}/label:
     put:
       tags:
       - sbom
@@ -2841,7 +3219,7 @@ paths:
           description: Modified the labels of the SBOM
         '404':
           description: The SBOM could not be found
-  /api/v2/sbom/{id}/license-export:
+  /api/v3/sbom/{id}/license-export:
     get:
       tags:
       - sbom
@@ -2865,7 +3243,136 @@ paths:
                   minimum: 0
         '404':
           description: The document could not be found
-  /api/v2/sbom/{id}/packages:
+  /api/v3/sbom/{id}/models:
+    get:
+      tags:
+      - sbom
+      summary: Search for AI models associated with an SBOM
+      operationId: listModels
+      parameters:
+      - name: id
+        in: path
+        description: ID of the SBOM to get models for
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: q
+        in: query
+        description: |
+          EBNF grammar for the _q_ parameter:
+          ```text
+              q = ( values | filter ) { '&' q }
+              values = value { '|', values }
+              filter = field, operator, values
+              operator = "=" | "!=" | "~" | "!~" | ">=" | ">" | "<=" | "<"
+              value = (* any text but escape special characters with '\' *)
+              field = (* must match an entity attribute name *)
+          ```
+          Any values in a _q_ will result in a case-insensitive "full
+          text search", effectively producing an OR clause of LIKE
+          clauses for every string-ish field in the resource being
+          queried.
+
+          Examples:
+          - `foo` - any field containing 'foo'
+          - `foo|bar` - any field containing either 'foo' OR 'bar'
+          - `foo&bar` - some field contains 'foo' AND some field contains 'bar'
+
+          A _filter_ may also be used to constrain the results. The
+          filter's field name must correspond to one of the resource's
+          attributes. If it doesn't, an error will be returned
+          containing a list of the valid fields for that resource.
+
+          An ASCII value of `NUL`, percent-encoded as `%00`, may be used
+          to find resources on which a particular field isn't set. For
+          example, `name=%00` and `name!=%00` yield the WHERE clauses,
+          'NAME IS NULL' and 'NAME IS NOT NULL', respectively.
+
+          Examples:
+          - `name=foo` - entity's _name_ matches 'foo' exactly
+          - `name~foo` - entity's _name_ contains 'foo', case-insensitive
+          - `name~foo|bar` - entity's _name_ contains either 'foo' OR 'bar', case-insensitive
+          - `name=` - entity's _name_ is the empty string, ''
+          - `name=%00` - entity's _name_ isn't set
+          - `published>3 days ago` - date values can be "human time"
+
+          Multiple full text searches and/or filters should be
+          '&'-delimited -- they are logically AND'd together.
+
+          - `red hat|fedora&labels:type=cve|osv&published>last wednesday 17:00`
+
+          Fields corresponding to JSON objects in the database may use a
+          ':' to delimit the column name and the object key,
+          e.g. `purl:qualifiers:type=pom`
+
+          Any operator or special character, e.g. '|', '&', within a
+          value should be escaped by prefixing it with a backslash.
+        required: false
+        schema:
+          type: string
+      - name: sort
+        in: query
+        description: |
+          EBNF grammar for the _sort_ parameter:
+          ```text
+              sort = field [ ':', order ] { ',' sort }
+              order = ( "asc" | "desc" )
+              field = (* must match the name of entity's attributes *)
+          ```
+          The optional _order_ should be one of "asc" or "desc". If
+          omitted, the order defaults to "asc".
+
+          Each _field_ name must correspond to one of the columns of the
+          table holding the entities being queried. Those corresponding
+          to JSON objects in the database may use a ':' to delimit the
+          column name and the object key,
+          e.g. `purl:qualifiers:type:desc`
+        required: false
+        schema:
+          type: string
+      - name: offset
+        in: query
+        description: |-
+          The first item to return, skipping all that come before it.
+
+          NOTE: The order of items is defined by the API being called.
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: limit
+        in: query
+        description: |-
+          The maximum number of entries to return.
+
+          Zero means: return no items (the total count is still computed if requested).
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
+      - name: counts
+        in: query
+        description: Include SBOM counts for each model
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: AI Models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResults_SbomModel'
+  /api/v3/sbom/{id}/packages:
     get:
       tags:
       - sbom
@@ -2968,12 +3475,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: Packages
@@ -2983,7 +3496,7 @@ paths:
                 $ref: '#/components/schemas/PaginatedResults_SbomPackage'
         '404':
           description: The SBOM could not be found
-  /api/v2/sbom/{id}/related:
+  /api/v3/sbom/{id}/related:
     get:
       tags:
       - sbom
@@ -3111,22 +3624,28 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: Packages
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedResults_SbomPackageRelation'
+                $ref: '#/components/schemas/PaginatedResults_SbomPackageRelation_SbomPackage'
         '404':
           description: The SBOM could not be found
-  /api/v2/sbom/{key}/download:
+  /api/v3/sbom/{key}/download:
     get:
       tags:
       - sbom
@@ -3135,6 +3654,7 @@ paths:
       parameters:
       - name: key
         in: path
+        description: Identifier of the SBOM, either `urn:uuid:<uuid>` or a digest e.g. `sha256:<hex>`
         required: true
         schema:
           $ref: '#/components/schemas/Id'
@@ -3148,7 +3668,7 @@ paths:
                 format: binary
         '404':
           description: The document could not be found
-  /api/v2/ui/extract-sbom-purls:
+  /api/v3/ui/extract-sbom-purls:
     post:
       tags:
       - ui
@@ -3181,7 +3701,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorInformation'
-  /api/v2/userPreference/{key}:
+  /api/v3/userPreference/{key}:
     get:
       tags:
       - userPreferences
@@ -3272,7 +3792,7 @@ paths:
           description: User preferences are deleted
         '412':
           description: The provided If-Match revision did not match the actual revision
-  /api/v2/vulnerability:
+  /api/v3/vulnerability:
     get:
       tags:
       - vulnerability
@@ -3341,12 +3861,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: Matching vulnerabilities
@@ -3354,12 +3880,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedResults_VulnerabilitySummary'
-  /api/v2/vulnerability/analyze:
+  /api/v3/vulnerability/analyze:
     post:
       tags:
       - vulnerability
-      summary: Analyze the provided purls for the known vulnerabilities
-      operationId: analyze
+      operationId: analyze_v3
       requestBody:
         content:
           application/json:
@@ -3372,8 +3897,8 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AnalysisResponse'
-  /api/v2/vulnerability/{id}:
+                $ref: '#/components/schemas/AnalysisResponseV3'
+  /api/v3/vulnerability/{id}:
     get:
       tags:
       - vulnerability
@@ -3386,6 +3911,12 @@ paths:
         required: true
         schema:
           type: string
+      - name: scores
+        in: query
+        description: Include the full scores array from the advisory that contributed the base_score.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: Specified vulnerability
@@ -3395,7 +3926,7 @@ paths:
                 $ref: '#/components/schemas/VulnerabilityDetails'
         '404':
           description: The vulnerability could not be found
-  /api/v2/weakness:
+  /api/v3/weakness:
     get:
       tags:
       - weakness
@@ -3492,12 +4023,18 @@ paths:
         description: |-
           The maximum number of entries to return.
 
-          Zero means: no limit
+          Zero means: return no items (the total count is still computed if requested).
         required: false
         schema:
           type: integer
           format: int64
           minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
       responses:
         '200':
           description: Matching weaknesses
@@ -3505,7 +4042,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedResults_LicenseSummary'
-  /api/v2/weakness/{id}:
+  /api/v3/weakness/{id}:
     get:
       tags:
       - weakness
@@ -3526,24 +4063,6 @@ paths:
                 $ref: '#/components/schemas/LicenseSummary'
         '404':
           description: The weakness could not be found
-  /api/v3/vulnerability/analyze:
-    post:
-      tags:
-      - vulnerability
-      operationId: analyze_v3
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AnalysisRequest'
-        required: true
-      responses:
-        '200':
-          description: Analyze the provided purls to search for known vulnerabilities
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AnalysisResponseV3'
 components:
   schemas:
     AdvisoryDetails:
@@ -3553,21 +4072,7 @@ components:
       - type: object
         required:
         - vulnerabilities
-        - average_severity
-        - average_score
         properties:
-          average_score:
-            type:
-            - number
-            - 'null'
-            format: double
-            description: Average (arithmetic mean) score of the advisory aggregated from *all* related vulnerability assertions.
-            deprecated: true
-          average_severity:
-            oneOf:
-            - type: 'null'
-            - $ref: '#/components/schemas/Severity'
-              description: Average (arithmetic mean) severity of the advisory aggregated from *all* related vulnerability assertions.
           vulnerabilities:
             type: array
             items:
@@ -3634,23 +4139,8 @@ components:
         description: Information pertaning to the underlying source document, if any.
       - type: object
         required:
-        - average_severity
-        - average_score
         - vulnerabilities
         properties:
-          average_score:
-            type:
-            - number
-            - 'null'
-            format: double
-            description: Average (arithmetic mean) score of the advisory aggregated from *all* related vulnerability assertions.
-            deprecated: true
-          average_severity:
-            type:
-            - string
-            - 'null'
-            description: Average (arithmetic mean) severity of the advisory aggregated from *all* related vulnerability assertions.
-            deprecated: true
           vulnerabilities:
             type: array
             items:
@@ -3660,43 +4150,17 @@ components:
       allOf:
       - $ref: '#/components/schemas/VulnerabilityHead'
       - type: object
+        required:
+        - scores
         properties:
-          score:
-            type:
-            - number
-            - 'null'
-            format: double
-            description: |-
-              The average (arithmetic mean) score this advisory assigns to
-              the particular vulnerability.
-          severity:
-            oneOf:
-            - type: 'null'
-            - $ref: '#/components/schemas/Severity'
-              description: |-
-                The English-language word description of the severity of the given
-                vulnerability, as asserted by the advisory, using the CVSS bucketing
-                ranges.
-
-                Critical: 9.0–10.0
-                High: 7.0–8.9
-                Medium: 4.0–6.9
-                Low: 0.1–3.9
-                None: 0
+          scores:
+            type: array
+            items:
+              $ref: '#/components/schemas/ScoredVector'
+            description: All CVSS scores with their raw vector strings from the advisory for this vulnerability.
     AdvisoryVulnerabilitySummary:
       allOf:
       - $ref: '#/components/schemas/AdvisoryVulnerabilityHead'
-      - type: object
-        required:
-        - cvss3_scores
-        properties:
-          cvss3_scores:
-            type: array
-            items:
-              type: string
-            description: |-
-              All CVSS3 scores from the advisory for the given vulnerability.
-              May include several, varying by minor version of the CVSS3 vector.
       description: Summary of information from this advisory regarding a single specific vulnerability.
     AnalysisAdvisory:
       allOf:
@@ -3872,6 +4336,26 @@ components:
     BasePurlSummary:
       allOf:
       - $ref: '#/components/schemas/BasePurlHead'
+    BaseScore:
+      type: object
+      description: |-
+        Base score information in the context of a [`VulnerabilityHead`]. Notably, this excludes the
+        raw CVSS vector string.
+
+        Uses the same `ScoreType` and `Severity` serialization as [`crate::common::model::Score`]
+        so that all score-related fields in API responses are consistent.
+      required:
+      - type
+      - severity
+      - score
+      properties:
+        score:
+          type: number
+          format: double
+        severity:
+          $ref: '#/components/schemas/Severity'
+        type:
+          $ref: '#/components/schemas/ScoreType'
     BaseSummary:
       type: object
       required:
@@ -4578,7 +5062,6 @@ components:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4589,37 +5072,23 @@ components:
               description: Information pertaning to the underlying source document, if any.
             - type: object
               required:
-              - average_severity
-              - average_score
               - vulnerabilities
               properties:
-                average_score:
-                  type:
-                  - number
-                  - 'null'
-                  format: double
-                  description: Average (arithmetic mean) score of the advisory aggregated from *all* related vulnerability assertions.
-                  deprecated: true
-                average_severity:
-                  type:
-                  - string
-                  - 'null'
-                  description: Average (arithmetic mean) severity of the advisory aggregated from *all* related vulnerability assertions.
-                  deprecated: true
                 vulnerabilities:
                   type: array
                   items:
                     $ref: '#/components/schemas/AdvisoryVulnerabilityHead'
                   description: Vulnerabilities addressed within this advisory.
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_BasePurlSummary:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4627,14 +5096,15 @@ components:
             allOf:
             - $ref: '#/components/schemas/BasePurlHead'
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_GroupDetails:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4675,14 +5145,15 @@ components:
                     This information is only present when requested.
             description: Detailed group information, extends [`Group`]
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_ImporterReport:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4714,14 +5185,15 @@ components:
                 - $ref: '#/components/schemas/Report'
                   description: Detailed report information
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_LicenseSummary:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4751,14 +5223,15 @@ components:
                 items:
                   type: string
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_LicenseText:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4770,14 +5243,15 @@ components:
               license:
                 type: string
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_Node:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4811,14 +5285,15 @@ components:
                     type: string
                   description: Warnings when processing this node.
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_ProductSummary:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4839,14 +5314,15 @@ components:
                   items:
                     $ref: '#/components/schemas/ProductVersionHead'
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_PurlSummary:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4871,14 +5347,57 @@ components:
                 version:
                   $ref: '#/components/schemas/VersionedPurlHead'
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+    PaginatedResults_SbomModel:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required:
+            - id
+            - name
+            - purls
+            - properties
+            - sbom_count
+            properties:
+              id:
+                type: string
+                description: The internal ID of a model
+              name:
+                type: string
+                description: The name of the model in the SBOM
+              properties:
+                type: object
+                description: The properties associated with the model
+                additionalProperties: {}
+                propertyNames:
+                  type: string
+              purls:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PurlSummary'
+                description: The model's PURL
+              sbom_count:
+                $ref: '#/components/schemas/RequestedField_i64_i64'
+                description: Number of SBOMs containing this model
+        total:
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_SbomPackage:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4914,7 +5433,13 @@ components:
                 type: array
                 items:
                   $ref: '#/components/schemas/LicenseRefMapping'
-                description: LicenseRef mappings
+                description: |-
+                  LicenseRef mappings
+
+                  **Deprecated**: Licenses are now pre-expanded at ingestion time via `expanded_license` /
+                  `sbom_license_expanded` tables. This field is always empty and will be removed in a future
+                  release.
+                deprecated: true
               name:
                 type: string
                 description: The name of the package in the SBOM
@@ -4929,14 +5454,15 @@ components:
                 - 'null'
                 description: An optional version for an SBOM package
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
-    PaginatedResults_SbomPackageRelation:
+    PaginatedResults_SbomPackageRelation_SbomPackage:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4947,18 +5473,69 @@ components:
             - package
             properties:
               package:
-                $ref: '#/components/schemas/SbomPackage'
+                type: object
+                required:
+                - id
+                - name
+                - purl
+                - cpe
+                - licenses
+                - licenses_ref_mapping
+                properties:
+                  cpe:
+                    type: array
+                    items:
+                      type: string
+                    description: CPEs identifying the package
+                  group:
+                    type:
+                    - string
+                    - 'null'
+                    description: An optional group/namespace for an SBOM package
+                  id:
+                    type: string
+                    description: The SBOM internal ID of a package
+                  licenses:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LicenseInfo'
+                    description: License info
+                  licenses_ref_mapping:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LicenseRefMapping'
+                    description: |-
+                      LicenseRef mappings
+
+                      **Deprecated**: Licenses are now pre-expanded at ingestion time via `expanded_license` /
+                      `sbom_license_expanded` tables. This field is always empty and will be removed in a future
+                      release.
+                    deprecated: true
+                  name:
+                    type: string
+                    description: The name of the package in the SBOM
+                  purl:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PurlSummary'
+                    description: PURLs identifying the package
+                  version:
+                    type:
+                    - string
+                    - 'null'
+                    description: An optional version for an SBOM package
               relationship:
                 $ref: '#/components/schemas/Relationship'
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_SbomSummary:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4975,14 +5552,135 @@ components:
                   items:
                     $ref: '#/components/schemas/SbomPackage'
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+    PaginatedResults_SbomSummary_SbomPackage:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            allOf:
+            - $ref: '#/components/schemas/SbomHead'
+            - $ref: '#/components/schemas/SourceDocument'
+            - type: object
+              required:
+              - described_by
+              properties:
+                described_by:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                    - id
+                    - name
+                    - purl
+                    - cpe
+                    - licenses
+                    - licenses_ref_mapping
+                    properties:
+                      cpe:
+                        type: array
+                        items:
+                          type: string
+                        description: CPEs identifying the package
+                      group:
+                        type:
+                        - string
+                        - 'null'
+                        description: An optional group/namespace for an SBOM package
+                      id:
+                        type: string
+                        description: The SBOM internal ID of a package
+                      licenses:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/LicenseInfo'
+                        description: License info
+                      licenses_ref_mapping:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/LicenseRefMapping'
+                        description: |-
+                          LicenseRef mappings
+
+                          **Deprecated**: Licenses are now pre-expanded at ingestion time via `expanded_license` /
+                          `sbom_license_expanded` tables. This field is always empty and will be removed in a future
+                          release.
+                        deprecated: true
+                      name:
+                        type: string
+                        description: The name of the package in the SBOM
+                      purl:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/PurlSummary'
+                        description: PURLs identifying the package
+                      version:
+                        type:
+                        - string
+                        - 'null'
+                        description: An optional version for an SBOM package
+        total:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+    PaginatedResults_SbomSummary_SbomPackageSummary:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            allOf:
+            - $ref: '#/components/schemas/SbomHead'
+            - $ref: '#/components/schemas/SourceDocument'
+            - type: object
+              required:
+              - described_by
+              properties:
+                described_by:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                    - id
+                    - name
+                    properties:
+                      group:
+                        type:
+                        - string
+                        - 'null'
+                        description: An optional group/namespace for an SBOM package
+                      id:
+                        type: string
+                        description: The SBOM internal ID of a package
+                      name:
+                        type: string
+                        description: The name of the package in the SBOM
+                      version:
+                        type:
+                        - string
+                        - 'null'
+                        description: An optional version for an SBOM package
+        total:
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_SpdxLicenseSummary:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
@@ -4997,43 +5695,25 @@ components:
               name:
                 type: string
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     PaginatedResults_VulnerabilitySummary:
       type: object
       required:
       - items
-      - total
       properties:
         items:
           type: array
           items:
             allOf:
             - $ref: '#/components/schemas/VulnerabilityHead'
-            - type: object
-              required:
-              - average_severity
-              - average_score
-              - advisories
-              properties:
-                advisories:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/VulnerabilityAdvisoryHead'
-                average_score:
-                  type:
-                  - number
-                  - 'null'
-                  format: double
-                  description: Average (arithmetic mean) score of the vulnerability aggregated from *all* related advisories.
-                average_severity:
-                  oneOf:
-                  - type: 'null'
-                  - $ref: '#/components/schemas/Severity'
-                    description: Average (arithmetic mean) severity of the vulnerability aggregated from *all* related advisories.
         total:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
           minimum: 0
     ProductDetails:
@@ -5221,19 +5901,11 @@ components:
       - vulnerability
       - advisory
       - scores
-      - average_severity
-      - average_score
       - status
       - context
       properties:
         advisory:
           $ref: '#/components/schemas/AdvisoryHead'
-        average_score:
-          type: number
-          format: double
-          deprecated: true
-        average_severity:
-          $ref: '#/components/schemas/Severity'
         context:
           oneOf:
           - type: 'null'
@@ -5241,7 +5913,7 @@ components:
         scores:
           type: array
           items:
-            $ref: '#/components/schemas/Score'
+            $ref: '#/components/schemas/ScoredVector'
           description: All CVSS scores associated with the vulnerability
         status:
           type: string
@@ -5368,20 +6040,18 @@ components:
     RemediationSummary:
       type: object
       required:
-      - id
       - category
       - data
       properties:
         category:
           $ref: '#/components/schemas/RemediationCategory'
-        data: {}
+        data:
+          description: For internal use only. May be removed at any point and should not be used.
+          deprecated: true
         details:
           type:
           - string
           - 'null'
-        id:
-          type: string
-          format: uuid
         url:
           type:
           - string
@@ -5422,6 +6092,34 @@ components:
           type: string
           format: date-time
           description: Start of the import run
+    RequestedField_Vec_Vec_ScoredVector:
+      oneOf:
+      - type: 'null'
+      - type: array
+        items:
+          allOf:
+          - $ref: '#/components/schemas/Score'
+            description: The score type, value, and derived severity.
+          - type: object
+            required:
+            - vector
+            properties:
+              vector:
+                type: string
+                description: The raw CVSS vector string (e.g. `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`).
+          description: |-
+            A CVSS score combined with its raw vector string, for contexts where clients need both
+            the pre-parsed numeric values and the original vector for display or re-parsing.
+          example:
+            type: '3.1'
+            value: 7.5
+            severity: high
+            vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H
+    RequestedField_i64_i64:
+      oneOf:
+      - type: 'null'
+      - type: integer
+        format: int64
     Revisioned_Importer:
       type: object
       description: |-
@@ -5536,6 +6234,35 @@ components:
             type: string
           v3Signatures:
             type: boolean
+    SbomModel:
+      type: object
+      required:
+      - id
+      - name
+      - purls
+      - properties
+      - sbom_count
+      properties:
+        id:
+          type: string
+          description: The internal ID of a model
+        name:
+          type: string
+          description: The name of the model in the SBOM
+        properties:
+          type: object
+          description: The properties associated with the model
+          additionalProperties: {}
+          propertyNames:
+            type: string
+        purls:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurlSummary'
+          description: The model's PURL
+        sbom_count:
+          $ref: '#/components/schemas/RequestedField_i64_i64'
+          description: Number of SBOMs containing this model
     SbomPackage:
       type: object
       required:
@@ -5568,7 +6295,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LicenseRefMapping'
-          description: LicenseRef mappings
+          description: |-
+            LicenseRef mappings
+
+            **Deprecated**: Licenses are now pre-expanded at ingestion time via `expanded_license` /
+            `sbom_license_expanded` tables. This field is always empty and will be removed in a future
+            release.
+          deprecated: true
         name:
           type: string
           description: The name of the package in the SBOM
@@ -5582,33 +6315,37 @@ components:
           - string
           - 'null'
           description: An optional version for an SBOM package
-    SbomPackageRelation:
+    SbomPackageSummary:
       type: object
       required:
-      - relationship
-      - package
+      - id
+      - name
       properties:
-        package:
-          $ref: '#/components/schemas/SbomPackage'
-        relationship:
-          $ref: '#/components/schemas/Relationship'
+        group:
+          type:
+          - string
+          - 'null'
+          description: An optional group/namespace for an SBOM package
+        id:
+          type: string
+          description: The SBOM internal ID of a package
+        name:
+          type: string
+          description: The name of the package in the SBOM
+        version:
+          type:
+          - string
+          - 'null'
+          description: An optional version for an SBOM package
     SbomStatus:
       allOf:
       - $ref: '#/components/schemas/VulnerabilityHead'
       - type: object
         required:
-        - average_severity
-        - average_score
         - status
         - packages
         - scores
         properties:
-          average_score:
-            type: number
-            format: double
-            deprecated: true
-          average_severity:
-            $ref: '#/components/schemas/Severity'
           context:
             oneOf:
             - type: 'null'
@@ -5620,7 +6357,7 @@ components:
           scores:
             type: array
             items:
-              $ref: '#/components/schemas/Score'
+              $ref: '#/components/schemas/ScoredVector'
           status:
             type: string
     SbomSummary:
@@ -5637,6 +6374,7 @@ components:
               $ref: '#/components/schemas/SbomPackage'
     Score:
       type: object
+      description: 'A parsed CVSS score: the scoring system version, numeric value, and derived severity.'
       required:
       - type
       - value
@@ -5644,14 +6382,18 @@ components:
       properties:
         severity:
           $ref: '#/components/schemas/Severity'
-          description: The derived severity
+          description: The severity band derived from the score value.
         type:
           $ref: '#/components/schemas/ScoreType'
-          description: The score type
+          description: The scoring system version.
         value:
           type: number
           format: double
-          description: The actual value
+          description: The numeric score, rounded to one decimal place.
+      example:
+        type: '3.1'
+        value: 7.5
+        severity: high
     ScoreType:
       type: string
       description: The type of score, indicating the scoring system and version used.
@@ -5665,22 +6407,40 @@ components:
       - CVSS v3.0 score
       - CVSS v3.1 score
       - CVSS v4.0 score
+    ScoredVector:
+      allOf:
+      - $ref: '#/components/schemas/Score'
+        description: The score type, value, and derived severity.
+      - type: object
+        required:
+        - vector
+        properties:
+          vector:
+            type: string
+            description: The raw CVSS vector string (e.g. `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`).
+      description: |-
+        A CVSS score combined with its raw vector string, for contexts where clients need both
+        the pre-parsed numeric values and the original vector for display or re-parsing.
+      example:
+        type: '3.1'
+        value: 7.5
+        severity: high
+        vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H
     Severity:
       type: string
-      description: |-
-        Qualitative Severity Rating Scale
-
-        Described in CVSS v3.1 Specification: Section 5:
-        <https://www.first.org/cvss/specification-document#t17>
-
-        > For some purposes it is useful to have a textual representation of the
-        > numeric Base, Temporal and Environmental scores.
+      description: Severity rating derived from a CVSS score value.
       enum:
       - none
       - low
       - medium
       - high
       - critical
+      x-enum-descriptions:
+      - No impact (score = 0.0)
+      - Low severity (score 0.1–3.9)
+      - Medium severity (score 4.0–6.9)
+      - High severity (score 7.0–8.9)
+      - Critical severity (score 9.0–10.0)
     SourceDocument:
       type: object
       required:
@@ -5883,18 +6643,13 @@ components:
       - $ref: '#/components/schemas/AdvisoryHead'
       - type: object
         required:
-        - severity
-        - score
+        - scores
         properties:
-          score:
-            type:
-            - number
-            - 'null'
-            format: double
-          severity:
-            oneOf:
-            - type: 'null'
-            - $ref: '#/components/schemas/Severity'
+          scores:
+            type: array
+            items:
+              $ref: '#/components/schemas/ScoredVector'
+            description: All CVSS scores with their raw vector strings from the advisory for this vulnerability.
     VulnerabilityAdvisoryStatus:
       type: object
       required:
@@ -5915,16 +6670,10 @@ components:
       - $ref: '#/components/schemas/VulnerabilityAdvisoryHead'
       - type: object
         required:
-        - cvss3_scores
         - purls
         - sboms
         - number_of_vulnerabilities
         properties:
-          cvss3_scores:
-            type: array
-            items:
-              type: string
-            description: CVSS3 scores from this advisory regarding the vulnerability.
           number_of_vulnerabilities:
             type: integer
             format: int64
@@ -5948,8 +6697,6 @@ components:
       - $ref: '#/components/schemas/VulnerabilityHead'
       - type: object
         required:
-        - average_severity
-        - average_score
         - advisories
         properties:
           advisories:
@@ -5957,18 +6704,11 @@ components:
             items:
               $ref: '#/components/schemas/VulnerabilityAdvisorySummary'
             description: Advisories addressing this vulnerability, if any.
-          average_score:
-            type:
-            - number
-            - 'null'
-            format: double
-            description: Average (arithmetic mean) score of the vulnerability aggregated from *all* related advisories.
-            deprecated: true
-          average_severity:
-            oneOf:
-            - type: 'null'
-            - $ref: '#/components/schemas/Severity'
-              description: Average (arithmetic mean) severity of the vulnerability aggregated from *all* related advisories.
+          scores:
+            $ref: '#/components/schemas/RequestedField_Vec_Vec_ScoredVector'
+            description: |-
+              Full CVSS scores from the authoritative advisory (the one that contributed the base_score).
+              Only present when the `scores` query parameter is set to `true`.
     VulnerabilityHead:
       type: object
       required:
@@ -5984,6 +6724,11 @@ components:
       - released
       - cwes
       properties:
+        base_score:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BaseScore'
+            description: The main, base score.
         cwes:
           type: array
           items:
@@ -6086,24 +6831,3 @@ components:
     VulnerabilitySummary:
       allOf:
       - $ref: '#/components/schemas/VulnerabilityHead'
-      - type: object
-        required:
-        - average_severity
-        - average_score
-        - advisories
-        properties:
-          advisories:
-            type: array
-            items:
-              $ref: '#/components/schemas/VulnerabilityAdvisoryHead'
-          average_score:
-            type:
-            - number
-            - 'null'
-            format: double
-            description: Average (arithmetic mean) score of the vulnerability aggregated from *all* related advisories.
-          average_severity:
-            oneOf:
-            - type: 'null'
-            - $ref: '#/components/schemas/Severity'
-              description: Average (arithmetic mean) severity of the vulnerability aggregated from *all* related advisories.
